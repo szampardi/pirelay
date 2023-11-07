@@ -1,0 +1,13 @@
+[Unit]
+Description=pirelay
+
+[Service]
+User=root
+Group=root
+WorkingDirectory=/dev/shm
+ExecStart=/usr/local/bin/pirelay -c /etc/pirelay.json
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
