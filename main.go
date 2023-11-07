@@ -20,7 +20,12 @@ func init() {
 	longitude := flag.Float64("lon", 0, "longitude")
 	configFile := flag.String("c", "", "json config file")
 	dumpConfig := flag.Bool("cd", false, "dump config and exit")
+	showVersion := flag.Bool("v", false, "print program version")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version())
+		os.Exit(0)
+	}
 	cfg = pirelay.New(*timezone, *listenAddr, [2]float64{*latitude, *longitude})
 	if *configFile != "" {
 		fmt.Fprintf(os.Stderr, "loading configuration file %s\n", *configFile)
@@ -66,4 +71,14 @@ func main() {
 		pirelay.Log(false, "pirelay started")
 		select {}
 	}
+}
+
+var (
+	semver = "0.0.0-dev"
+	commit = "git"
+	built  = "a long time ago"
+)
+
+func version() string {
+	return fmt.Sprintf("pirelay version %s commit %s built %s", semver, commit, built)
 }
