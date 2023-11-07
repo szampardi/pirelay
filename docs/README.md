@@ -7,7 +7,7 @@ raspberrypi (and others) relay manager with embedded http service and support fo
 
 #
 ### Usage:
-- build the program
+- build the program or get a [release bin](https://github.com/szampardi/pirelay/releases)
 - connect one or more relays to a GPIO pin (or pins)
 - create a json configuration file such as:
 ```json
