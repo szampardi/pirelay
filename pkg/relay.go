@@ -3,11 +3,16 @@ package pirelay
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/stianeikeland/go-rpio/v4"
 )
 
 type (
+	RelayChange struct {
+		State RelayState    `json:"state"`
+		For   time.Duration `json:"for"`
+	}
 	RelayState int
 	Relay      struct {
 		Name      string     `json:"name"`
@@ -16,16 +21,20 @@ type (
 		Schedules Schedules  `json:"schedules"`
 		Sun       Sun        `json:"sun"`
 
-		timezone      string
-		location      [2]float64
+		timezone string
+		location [2]float64
+
+		changes       chan *RelayChange
 		stopSchedules chan bool
-		pin           rpio.Pin
-		mu            *sync.Mutex
+
+		pin rpio.Pin
+		mu  *sync.Mutex
 	}
 )
 
 const (
-	StateOFF RelayState = iota
+	StateToggle RelayState = iota - 1
+	StateOFF
 	StateON
 )
 
@@ -88,16 +97,46 @@ func (r *Relay) set(s RelayState) {
 	Log(false, "turned %s relay %s on GPIO %d", r.State, r.Name, r.GPIO)
 }
 
+func (r *Relay) TimedOn(dur time.Duration) {
+	r.On()
+	if dur != 0 {
+		go func() {
+			time.Sleep(dur)
+			r.Off()
+		}()
+	}
+}
+
 func (r *Relay) On() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.set(StateON)
 }
 
+func (r *Relay) TimedOff(dur time.Duration) {
+	r.Off()
+	if dur != 0 {
+		go func() {
+			time.Sleep(dur)
+			r.On()
+		}()
+	}
+}
+
 func (r *Relay) Off() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.set(StateOFF)
+}
+
+func (r *Relay) TimedToggle(dur time.Duration) {
+	r.Toggle()
+	if dur != 0 {
+		go func() {
+			time.Sleep(dur)
+			r.Toggle()
+		}()
+	}
 }
 
 func (r *Relay) Toggle() {
@@ -142,6 +181,23 @@ func (c *Config) NewRelay(gpio int, name string, opts ...interface{}) (*Relay, e
 			r.location = t
 		case string:
 			r.timezone = t
+		case chan *RelayChange:
+			r.changes = t
+			go func() {
+				select {
+				case change := <-r.changes:
+					switch change.State {
+					case StateToggle:
+						r.TimedToggle(change.For)
+					case StateOFF:
+						r.TimedOff(change.For)
+					case StateON:
+						r.TimedOn(change.For)
+					}
+				case <-r.stopSchedules:
+					return
+				}
+			}()
 		}
 	}
 	if r.Sun.Enabled && (r.location[0] == 0 && r.location[1] == 0) {

@@ -10,10 +10,11 @@ import (
 
 type (
 	RelaySchedule struct {
-		Name   string        `json:"name"`
-		At     time.Duration `json:"at"` // after midnight local time
-		State  RelayState    `json:"state"`
-		ticker *time.Ticker
+		Name          string        `json:"name"`
+		At            time.Duration `json:"at"` // after midnight local time
+		atTicker      *time.Ticker
+		State         RelayState    `json:"state"`
+		StateDuration time.Duration `json:"for"`
 	}
 	Schedules map[string]*RelaySchedule
 	Sun       struct {
@@ -44,10 +45,11 @@ func (r *Relay) AddSchedule(sc RelaySchedule, tz string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.Schedules[sc.Name] = &RelaySchedule{
-		Name:   sc.Name,
-		At:     sc.At,
-		State:  sc.State,
-		ticker: time.NewTicker(midnight.Add(sc.At).Sub(now)),
+		Name:          sc.Name,
+		At:            sc.At,
+		atTicker:      time.NewTicker(midnight.Add(sc.At).Sub(now)),
+		State:         sc.State,
+		StateDuration: sc.StateDuration,
 	}
 	Log(false, "added schedule for relay %s: %v", r.Name, sc)
 }
@@ -57,7 +59,7 @@ func (r *Relay) RemoveSchedule(name string) error {
 	defer r.mu.Unlock()
 	for sn, sc := range r.Schedules {
 		if name == sn {
-			sc.ticker.Stop()
+			sc.atTicker.Stop()
 			return nil
 		}
 	}
@@ -81,27 +83,22 @@ loop:
 	for {
 		for sn, sc := range r.Schedules {
 			select {
-			case <-sc.ticker.C:
+			case <-sc.atTicker.C:
 				Log(false, "running schedule %s for relay %s at %v", sn, r.Name, sc.At.String())
-				switch sc.State {
-				case StateOFF:
-					r.Off()
-				case StateON:
-					r.On()
-				}
-				sc.ticker.Stop()
+				r.TimedToggle(sc.StateDuration)
+				sc.atTicker.Stop()
 			default:
 			}
 		}
 		select {
 		case <-r.stopSchedules:
 			for _, sc := range r.Schedules {
-				sc.ticker.Stop()
+				sc.atTicker.Stop()
 			}
 			return
 		case <-midnightTicker.C:
 			for _, sc := range r.Schedules {
-				sc.ticker.Stop()
+				sc.atTicker.Stop()
 			}
 			break loop
 		default:
@@ -127,9 +124,9 @@ func (r *Relay) createSchedules(location [2]float64, tz string) bool {
 			State: sc.State,
 		}
 		if now.After(midnight.Add(sc.At)) {
-			r.Schedules[sn].ticker = time.NewTicker(midnight.Add(time.Hour * 24).Add(sc.At).Sub(now))
+			r.Schedules[sn].atTicker = time.NewTicker(midnight.Add(time.Hour * 24).Add(sc.At).Sub(now))
 		} else {
-			r.Schedules[sn].ticker = time.NewTicker(midnight.Add(sc.At).Sub(now))
+			r.Schedules[sn].atTicker = time.NewTicker(midnight.Add(sc.At).Sub(now))
 		}
 	}
 	if r.Sun.Enabled || !(location[0] == 0 && location[1] == 0) {
@@ -140,9 +137,9 @@ func (r *Relay) createSchedules(location [2]float64, tz string) bool {
 			State: r.Sun.RiseState,
 		}
 		if now.After(rise) {
-			r.Schedules["sunrise"].ticker = time.NewTicker(rise.Add(time.Hour * 24).Sub(now))
+			r.Schedules["sunrise"].atTicker = time.NewTicker(rise.Add(time.Hour * 24).Sub(now))
 		} else {
-			r.Schedules["sunrise"].ticker = time.NewTicker(rise.Sub(now))
+			r.Schedules["sunrise"].atTicker = time.NewTicker(rise.Sub(now))
 		}
 		r.Schedules["sunset"] = &RelaySchedule{
 			Name:  "sunset",
@@ -150,9 +147,9 @@ func (r *Relay) createSchedules(location [2]float64, tz string) bool {
 			State: r.Sun.SetState,
 		}
 		if now.After(set) {
-			r.Schedules["sunset"].ticker = time.NewTicker(set.Add(time.Hour * 24).Sub(now))
+			r.Schedules["sunset"].atTicker = time.NewTicker(set.Add(time.Hour * 24).Sub(now))
 		} else {
-			r.Schedules["sunset"].ticker = time.NewTicker(set.Sub(now))
+			r.Schedules["sunset"].atTicker = time.NewTicker(set.Sub(now))
 		}
 		if now.After(rise) && now.Before(set) {
 			r.set(r.Sun.RiseState)
@@ -188,9 +185,9 @@ func (r *Relay) updateSchedules(location [2]float64, tz string) {
 				State: r.Sun.RiseState,
 			}
 			if now.After(rise) {
-				r.Schedules[sn].ticker = time.NewTicker(rise.Add(time.Hour * 24).Sub(now))
+				r.Schedules[sn].atTicker = time.NewTicker(rise.Add(time.Hour * 24).Sub(now))
 			} else {
-				r.Schedules[sn].ticker = time.NewTicker(rise.Sub(now))
+				r.Schedules[sn].atTicker = time.NewTicker(rise.Sub(now))
 			}
 		case "sunset":
 			if !r.Sun.Enabled || set.IsZero() {
@@ -202,9 +199,9 @@ func (r *Relay) updateSchedules(location [2]float64, tz string) {
 				State: r.Sun.SetState,
 			}
 			if now.After(set) {
-				r.Schedules[sn].ticker = time.NewTicker(set.Add(time.Hour * 24).Sub(now))
+				r.Schedules[sn].atTicker = time.NewTicker(set.Add(time.Hour * 24).Sub(now))
 			} else {
-				r.Schedules[sn].ticker = time.NewTicker(set.Sub(now))
+				r.Schedules[sn].atTicker = time.NewTicker(set.Sub(now))
 			}
 		default:
 			r.Schedules[sn] = &RelaySchedule{
@@ -213,9 +210,9 @@ func (r *Relay) updateSchedules(location [2]float64, tz string) {
 				State: sc.State,
 			}
 			if now.After(midnight.Add(r.Schedules[sn].At)) {
-				r.Schedules[sn].ticker = time.NewTicker(midnight.Add(time.Hour * 24).Add(sc.At).Sub(now))
+				r.Schedules[sn].atTicker = time.NewTicker(midnight.Add(time.Hour * 24).Add(sc.At).Sub(now))
 			} else {
-				r.Schedules[sn].ticker = time.NewTicker(midnight.Add(sc.At).Sub(now))
+				r.Schedules[sn].atTicker = time.NewTicker(midnight.Add(sc.At).Sub(now))
 			}
 		}
 	}
@@ -285,7 +282,7 @@ func (s *Sun) UnmarshalJSON(data []byte) error {
 		if err != nil {
 			return err
 		}
-	} else {
+	} else if s.Enabled {
 		return fmt.Errorf("missing state setting for sunrise")
 	}
 	if v, ok := x["rise_offset"]; ok {
@@ -302,7 +299,7 @@ func (s *Sun) UnmarshalJSON(data []byte) error {
 		if err != nil {
 			return err
 		}
-	} else {
+	} else if s.Enabled {
 		return fmt.Errorf("missing state setting for sunset")
 	}
 	if v, ok := x["set_offset"]; ok {
