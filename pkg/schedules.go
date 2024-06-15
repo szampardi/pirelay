@@ -129,7 +129,7 @@ func (r *Relay) createSchedules(location [2]float64, tz string) bool {
 			r.Schedules[sn].atTicker = time.NewTicker(midnight.Add(sc.At).Sub(now))
 		}
 	}
-	if r.Sun.Enabled || !(location[0] == 0 && location[1] == 0) {
+	if r.Sun.Enabled && !(location[0] == 0 && location[1] == 0) {
 		rise, set := computeSunTimes(location, r.Sun.RiseOffset, r.Sun.SetOffset)
 		r.Schedules["sunrise"] = &RelaySchedule{
 			Name:  "sunrise",
